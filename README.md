@@ -59,6 +59,16 @@ The changes made to this repository are documented in the [CHANGELOG](CHANGELOG.
 This repository uses [SemVer](http://semver.org/) for versioning.
 For the versions available, see the [tags on this repository](https://github.com/RichysHub/MagicaVoxel-VOX-importer/releases/tags).
 
+## Known bugs
+- Groups are placed in the wrong place when imported
+- Object rotation doesn't work yet
+- Some materials (like clouds) don't work or are untested for conversion
+- README needs to be updated to keep up with this fork
+- Blender operators (calls starting with `bpy.ops`) should be replaced with their back-end equivalents. This is because operators trigger a scene update every time they are called, which slows down importing after many operations.
+- Need to add unit testing at least
+
+If you can assist with any of these, open a pull request!
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details
