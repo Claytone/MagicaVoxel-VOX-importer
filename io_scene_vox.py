@@ -50,7 +50,8 @@ class ImportVox(Operator, ImportHelper):
                                     ('VertCol', 'Vertex Colors',
                                      "Create one material and store color and material data in vertex colors."),
                                     ('Tex', 'Textures', "Generates textures to store color and material data."),
-                                    ('Recolor', 'Recolor', "Loads all colors into scene and overrides existing colors, regardless of usage.")
+                                    ('Recolor', 'Recolor',
+                                     "Loads all colors into scene and overrides existing colors, regardless of usage.")
                                 ),
                                 default='Recolor')
 
@@ -375,8 +376,61 @@ def read_dict(content):
     return dict
 
 
-def import_vox(path, options):
+def solve_scene_graph(transforms, groups, shapes, models):
+    """
+    Applies transformations to generated models
+    :param transforms: {int node_id: [child_id, Vec3 transform, Vec3 rotation], ...}
+    :param groups: {int node_id: [int child_id, ...], ...}
+    :param shapes: {int node_id: [int model_id (not a node)], ...}
+    :return: models with correct transforms applied.
+    """
+    if 0 not in transforms.keys():
+        raise ValueError(
+            f"Root (id: 0) not found in transform nodes {list(transforms.keys())}. This probably means an assumption about tree structure is incorrect.")
+    transformed_models = []
 
+    def traverse_scene_graph(current_location, current_id):
+        if current_id in transforms.keys():
+            new_location = transforms[current_id][1]
+            current_location = Vec3(
+                current_location.x + new_location.x,
+                current_location.y + new_location.y,
+                current_location.z + new_location.z
+            )
+            # TODO: rotation support
+            traverse_scene_graph(current_location, transforms[current_id][0])
+        elif current_id in groups.keys():
+            for child_id in groups[current_id]:
+                traverse_scene_graph(current_location, child_id)
+        elif current_id in shapes.keys():
+            for model_id in shapes[current_id]:
+                model = copy.deepcopy(models[model_id])
+                model.position = current_location
+                transformed_models.append(model)
+
+    traverse_scene_graph(Vec3(0, 0, 0), 0)
+    # for transform_node in transforms.values():
+    #     trans_child_id = transform_node[0]
+    #     translation = transform_node[1]
+    #     rotation = transform_node[2]
+    #
+    #     if trans_child_id in groups:
+    #         group_children = groups[trans_child_id]
+    #         print(f"Group children IDs: {group_children}")
+    #         # In my testing, group nodes never have valid
+    #         # children ids. Is the documentation correct?
+    #
+    #     if trans_child_id in shapes:
+    #         shape_children = shapes[trans_child_id]
+    #
+    #         for model_id in shape_children:
+    #             model = copy.deepcopy(models[model_id])
+    #             model.position = translation
+    #             transformed_models.append(model)
+    return transformed_models
+
+
+def import_vox(path, options):
     models = {}  # {model id : VoxelObject}
     mod_id = 0
     transforms = {}  # Transform Node {child id : [location, rotation]}
@@ -428,7 +482,7 @@ def import_vox(path, options):
                 _ = read_dict(content)
 
                 child_id, _, _, _, = struct.unpack('<4i', read_content(content, 16))
-                transforms[child_id] = [Vec3(0, 0, 0), Vec3(0, 0, 0)]
+                transforms[id] = [child_id, Vec3(0, 0, 0), Vec3(0, 0, 0)]
 
                 frames = read_dict(content)
                 for key in frames:
@@ -437,7 +491,7 @@ def import_vox(path, options):
 
                     elif key == b'_t':  # Translation
                         value = frames[key].decode('utf-8').split()
-                        transforms[child_id][0] = Vec3(int(value[0]), int(value[1]), int(value[2]))
+                        transforms[id][1] = Vec3(int(value[0]), int(value[1]), int(value[2]))
 
             elif name == b'nGRP':
                 id, = struct.unpack('<i', read_content(content, 4))
@@ -513,7 +567,8 @@ def import_vox(path, options):
                     else:
                         unknown_keys.append(str(key))
                 if unknown_keys:
-                    print(f"#{id - 1}: Unknown keys: {unknown_keys}")
+                    pass
+                    # print(f"#{id - 1}: Unknown keys: {unknown_keys}")
 
     ### Import Options ###
 
@@ -673,23 +728,8 @@ def import_vox(path, options):
             links.new(mat_tex.outputs["Alpha"], multiply.inputs[0])
             # links.new(multiply.outputs[0], bsdf.inputs["Emission Strength"])
 
-    transformed_models = []
     ### Apply Transforms ##
-    for trans_child in transforms:
-        trans = transforms[trans_child]
-
-        if trans_child in groups:
-            group_children = groups[trans_child]
-            # In my testing, group nodes never have valid
-            # children ids. Is the documentation correct?
-
-        if trans_child in shapes:
-            shape_children = shapes[trans_child]
-
-            for model_id in shape_children:
-                model = copy.deepcopy(models[model_id])
-                model.position = trans[0]
-                transformed_models.append(model)
+    transformed_models = solve_scene_graph(transforms, groups, shapes, models)
 
     ## Create Collections ##
     collections = (None, None, None)

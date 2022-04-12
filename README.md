@@ -60,7 +60,6 @@ This repository uses [SemVer](http://semver.org/) for versioning.
 For the versions available, see the [tags on this repository](https://github.com/RichysHub/MagicaVoxel-VOX-importer/releases/tags).
 
 ## Known bugs
-- Groups are placed in the wrong place when imported
 - Object rotation doesn't work yet
 - Some materials (like clouds) don't work or are untested for conversion
 - README needs to be updated to keep up with this fork
