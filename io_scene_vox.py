@@ -81,6 +81,7 @@ class ImportVox(Operator, ImportHelper):
                            default=True)
 
     def execute(self, context):
+        print("\n=== Vox Importer ===\n")
         paths = [os.path.join(self.directory, name.name) for name in self.files]
         if not paths:
             paths.append(self.filepath)
@@ -118,6 +119,15 @@ class ImportVox(Operator, ImportHelper):
 class Vec3:
     def __init__(self, X, Y, Z):
         self.x, self.y, self.z = X, Y, Z
+
+    def __str__(self):
+        return f"Vec3{self.as_tup()}"
+
+    def __repr__(self):
+        return str(self)
+
+    def as_tup(self):
+        return self.x, self.y, self.z
 
     def _index(self):
         return self.x + self.y * 256 + self.z * 256 * 256
@@ -331,6 +341,7 @@ class VoxelObject:
         bpy.ops.transform.translate(
             value=(self.position.x * vox_size, self.position.y * vox_size, self.position.z * vox_size))
         bpy.ops.transform.resize(value=(vox_size, vox_size, vox_size))
+        obj.rotation_euler = self.rotation.as_tup()
 
         # Cleanup Mesh
         if cleanup:
@@ -384,12 +395,13 @@ def solve_scene_graph(transforms, groups, shapes, models):
     :param shapes: {int node_id: [int model_id (not a node)], ...}
     :return: models with correct transforms applied.
     """
+
     if 0 not in transforms.keys():
         raise ValueError(
             f"Root (id: 0) not found in transform nodes {list(transforms.keys())}. This probably means an assumption about tree structure is incorrect.")
     transformed_models = []
 
-    def traverse_scene_graph(current_location, current_id):
+    def traverse_scene_graph(current_location, current_rotation, current_id):
         if current_id in transforms.keys():
             new_location = transforms[current_id][1]
             current_location = Vec3(
@@ -397,18 +409,20 @@ def solve_scene_graph(transforms, groups, shapes, models):
                 current_location.y + new_location.y,
                 current_location.z + new_location.z
             )
-            # TODO: rotation support
-            traverse_scene_graph(current_location, transforms[current_id][0])
+            new_rotation = transforms[current_id][2]
+            current_rotation = [sum(pair) for pair in zip(new_rotation, current_rotation)]
+            traverse_scene_graph(current_location, current_rotation, transforms[current_id][0])
         elif current_id in groups.keys():
             for child_id in groups[current_id]:
-                traverse_scene_graph(current_location, child_id)
+                traverse_scene_graph(current_location, current_rotation, child_id)
         elif current_id in shapes.keys():
             for model_id in shapes[current_id]:
                 model = copy.deepcopy(models[model_id])
+                model.rotation = Vec3(*current_rotation)
                 model.position = current_location
                 transformed_models.append(model)
 
-    traverse_scene_graph(Vec3(0, 0, 0), 0)
+    traverse_scene_graph(current_location=Vec3(0, 0, 0), current_rotation=[0, 0, 0], current_id=0)
     # for transform_node in transforms.values():
     #     trans_child_id = transform_node[0]
     #     translation = transform_node[1]
@@ -428,6 +442,53 @@ def solve_scene_graph(transforms, groups, shapes, models):
     #             model.position = translation
     #             transformed_models.append(model)
     return transformed_models
+
+
+def parse_rotation_matrix(byte):
+    """
+    Parse the Magicavoxel byte -> rotation matrix format
+    :param byte: object that can be cast to int, less than  bits
+    :return: 3x3 rotation matrix
+    """
+    rotation_matrix = [
+        [0, 0, 0],
+        [0, 0, 0],
+        [0, 0, 0]
+    ]
+    open_rows = [0, 1, 2]
+    # Chop off '0b' and pad to 8 bits
+    byte_string = bin(int(byte))[2:].zfill(8)
+    first_row_coord = int(byte_string[-2:], 2)
+    second_row_coord = int(byte_string[-4:-2], 2)
+    open_rows.remove(first_row_coord)
+    open_rows.remove(second_row_coord)
+    third_row_coord = open_rows[0]
+    if byte_string[-5] == '1':
+        rotation_matrix[0][first_row_coord] = -1
+    else:
+        rotation_matrix[0][first_row_coord] = 1
+    if byte_string[-6] == '1':
+        rotation_matrix[1][second_row_coord] = -1
+    else:
+        rotation_matrix[1][second_row_coord] = 1
+    if byte_string[-7] == '1':
+        rotation_matrix[2][third_row_coord] = -1
+    else:
+        rotation_matrix[2][third_row_coord] = 1
+    return rotation_matrix
+
+
+def rotation_to_euler(matrix):
+    """
+    Converts a rotation matrix to euler rotation radians
+    For math, refer to https://stackoverflow.com/questions/15022630/how-to-calculate-the-angle-from-rotation-matrix
+    :param matrix: [3x3 rotational matrix]
+    :return: [float, float, float] rotation euler radians
+    """
+    x = math.atan2(matrix[2][1], matrix[2][2])
+    y = math.atan2(-1 * matrix[2][0], math.sqrt((matrix[2][1] ** 2) + (matrix[2][2] ** 2)))
+    z = math.atan2(matrix[1][0], matrix[0][0])
+    return x, y, z
 
 
 def import_vox(path, options):
@@ -482,13 +543,14 @@ def import_vox(path, options):
                 _ = read_dict(content)
 
                 child_id, _, _, _, = struct.unpack('<4i', read_content(content, 16))
-                transforms[id] = [child_id, Vec3(0, 0, 0), Vec3(0, 0, 0)]
+                transforms[id] = [child_id, Vec3(0, 0, 0), [0, 0, 0]]
 
                 frames = read_dict(content)
                 for key in frames:
                     if key == b'_r':  # Rotation
-                        pass  # Can't figure out how to read rotation.
-
+                        byte = frames[key]
+                        euler = rotation_to_euler(parse_rotation_matrix(byte))
+                        transforms[id][2] = euler
                     elif key == b'_t':  # Translation
                         value = frames[key].decode('utf-8').split()
                         transforms[id][1] = Vec3(int(value[0]), int(value[1]), int(value[2]))
